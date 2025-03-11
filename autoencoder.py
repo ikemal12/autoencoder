@@ -1,62 +1,69 @@
-import numpy as np
-import matplotlib.pyplot as plt
-
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import torchvision.transforms as transforms
+import numpy as np
+from torch.utils.data import DataLoader, TensorDataset
+from torchvision import transforms
 
-
-class Autoencoder(nn.Module):
+class ConvAutoencoder(nn.Module):
     def __init__(self):
-        super().__init__()
-
+        super(ConvAutoencoder, self).__init__()
+        
         self.encoder = nn.Sequential(
-            nn.Linear(150*225, 128),
+            nn.Conv2d(3, 16, kernel_size=3, stride=2, padding=1),  # Output: (16, 76, 112)
             nn.ReLU(),
-            nn.Linear(128, 64),
+            nn.Conv2d(16, 32, kernel_size=3, stride=2, padding=1),  # Output: (32, 38, 56)
             nn.ReLU(),
-            nn.Linear(64, 12),
-            nn.ReLU(),
-            nn.Linear(12, 3)
+            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),  # Output: (64, 19, 28)
+            nn.ReLU()
         )
-
+        
         self.decoder = nn.Sequential(
-            nn.Linear(3, 12),
+            nn.ConvTranspose2d(64, 32, kernel_size=3, stride=2, padding=1, output_padding=(1, 0)),  # Output: (32, 38, 56)
             nn.ReLU(),
-            nn.Linear(12, 64),
+            nn.ConvTranspose2d(32, 16, kernel_size=3, stride=2, padding=1, output_padding=(1, 0)),  # Output: (16, 76, 112)
             nn.ReLU(),
-            nn.Linear(64, 128),
-            nn.ReLU(),
-            nn.Linear(128, 150*225),
+            nn.ConvTranspose2d(16, 3, kernel_size=3, stride=2, padding=1, output_padding=(0, 0)),  # Output: (3, 152, 224)
             nn.Sigmoid()
         )
-
-
+    
     def forward(self, x):
         encoded = self.encoder(x)
-        decoded = self.decode(encoded)
+        decoded = self.decoder(encoded)
         return decoded
-    
 
-transform = transforms.Compose([transforms.ToTensor()])
-images = np.load("subset_1.npy")
-dataloader = torch.utils.data.DataLoader(images, batch_size=64, shuffle=True)
+subset_1 = np.load("subset_1.npy")
+subset_2 = np.load("subset_2.npy")
+subset_3 = np.load("subset_3.npy")
+data = np.concatenate((subset_1, subset_2, subset_3), axis=0)
+data = data.reshape(-1, 150, 225, 3)  
 
-model = Autoencoder()
+transform = transforms.Compose([
+    transforms.ToPILImage(),  
+    transforms.Resize((152, 224)),  
+    transforms.ToTensor()  
+])
+
+data_tensor = torch.stack([transform(img) for img in data])
+dataset = TensorDataset(data_tensor)
+dataloader = DataLoader(dataset, batch_size=64, shuffle=True)
+
+device = torch.device('cpu')
+model = ConvAutoencoder().to(device)
 criterion = nn.MSELoss()
-optimiser = optim.Adam(model.parameters(), lr=0.001)
+optimizer = optim.Adam(model.parameters(), lr=0.001)
 
-num_epochs = 5
-outputs = []
+num_epochs = 20
 for epoch in range(num_epochs):
-    for img in dataloader:
+    for batch in dataloader:
+        img = batch[0].to(device)
         recon = model(img)
         loss = criterion(recon, img)
 
-        optimiser.zero_grad()
+        optimizer.zero_grad()
         loss.backward()
-        optimiser.step()
+        optimizer.step()
 
     print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {loss.item():.4f}')
-    outputs.append((epoch, img, recon))
+
+#torch.save(model.state_dict(), 'conv_autoencoder_resized.pth')
