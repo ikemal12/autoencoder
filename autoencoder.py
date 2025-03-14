@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import torch.nn.functional as F
 import numpy as np
 from torch.utils.data import DataLoader, TensorDataset
 from torchvision import transforms
@@ -19,11 +20,11 @@ class ConvAutoencoder(nn.Module):
         )
         
         self.decoder = nn.Sequential(
-            nn.ConvTranspose2d(64, 32, kernel_size=3, stride=2, padding=1, output_padding=(1, 0)),  # Output: (32, 38, 56)
+            nn.ConvTranspose2d(64, 32, kernel_size=3, stride=2, padding=1, output_padding=1),  # Output: (32, 38, 56)
             nn.ReLU(),
-            nn.ConvTranspose2d(32, 16, kernel_size=3, stride=2, padding=1, output_padding=(1, 0)),  # Output: (16, 76, 112)
+            nn.ConvTranspose2d(32, 16, kernel_size=3, stride=2, padding=1, output_padding=1),  # Output: (16, 76, 112)
             nn.ReLU(),
-            nn.ConvTranspose2d(16, 3, kernel_size=3, stride=2, padding=1, output_padding=(0, 0)),  # Output: (3, 152, 224)
+            nn.ConvTranspose2d(16, 3, kernel_size=3, stride=2, padding=1, output_padding=1),  # Output: (3, 152, 224)
             nn.Sigmoid()
         )
     
@@ -31,6 +32,10 @@ class ConvAutoencoder(nn.Module):
         encoded = self.encoder(x)
         decoded = self.decoder(encoded)
         return decoded
+    
+class RMSELoss(nn.Module):
+    def forward(self, pred, target):
+        return torch.sqrt(F.mse_loss(pred, target))
 
 subset_1 = np.load("subset_1.npy")
 subset_2 = np.load("subset_2.npy")
@@ -50,7 +55,7 @@ dataloader = DataLoader(dataset, batch_size=64, shuffle=True)
 
 device = torch.device('cpu')
 model = ConvAutoencoder().to(device)
-criterion = nn.MSELoss()
+criterion = RMSELoss() #nn.MSELoss()
 optimizer = optim.Adam(model.parameters(), lr=0.001)
 
 num_epochs = 20
