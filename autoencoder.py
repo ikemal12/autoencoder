@@ -1,14 +1,14 @@
 import torch
+import numpy as np
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
-import numpy as np
 from torch.utils.data import DataLoader, TensorDataset
 from torchvision import transforms
 
-class ConvAutoencoder(nn.Module):
+class Autoencoder(nn.Module):
     def __init__(self):
-        super(ConvAutoencoder, self).__init__()
+        super(Autoencoder, self).__init__()
         
         self.encoder = nn.Sequential(
             nn.Conv2d(3, 16, kernel_size=3, stride=2, padding=1),  # Output: (16, 76, 112)
@@ -37,6 +37,7 @@ class RMSELoss(nn.Module):
     def forward(self, pred, target):
         return torch.sqrt(F.mse_loss(pred, target))
 
+# loading data 
 subset_1 = np.load("subset_1.npy")
 subset_2 = np.load("subset_2.npy")
 subset_3 = np.load("subset_3.npy")
@@ -54,21 +55,31 @@ dataset = TensorDataset(data_tensor)
 dataloader = DataLoader(dataset, batch_size=64, shuffle=True)
 
 device = torch.device('cpu')
-model = ConvAutoencoder().to(device)
+model = Autoencoder().to(device)
 criterion = RMSELoss() #nn.MSELoss()
 optimizer = optim.Adam(model.parameters(), lr=0.001)
+scaler = torch.amp.GradScaler('cuda')
+best_loss = float('inf')  
 
+# training loop
 num_epochs = 20
 for epoch in range(num_epochs):
     for batch in dataloader:
         img = batch[0].to(device)
-        recon = model(img)
-        loss = criterion(recon, img)
-
         optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+
+        with torch.amp.autocast('cuda'):
+            recon = model(img)
+            loss = criterion(recon, img)
+
+        scaler.scale(loss).backward()  
+        scaler.step(optimizer)
+        scaler.update() 
+
+        # save the model only if the loss improves
+        if loss.item() < best_loss:
+            best_loss = loss.item()
+            torch.save(model.state_dict(), 'autoencoder.pth')
+            print(f"Best model saved with loss: {best_loss:.4f}")
 
     print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {loss.item():.4f}')
-
-#torch.save(model.state_dict(), 'conv_autoencoder_resized.pth')
