@@ -65,6 +65,7 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 model = Autoencoder().to(device)
 criterion = RMSELoss() #nn.MSELoss()
 optimizer = optim.Adam(model.parameters(), lr=0.001)
+scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=2, factor=0.5)
 use_amp = torch.cuda.is_available()
 scaler = torch.amp.GradScaler('cuda') if use_amp else None
 
@@ -85,8 +86,9 @@ compression_ratio = input_size / encoded_size
 print(f"Compression Ratio: {compression_ratio:.2f}")
 
 # Training loop
-num_epochs = 20
+num_epochs = 10
 for epoch in range(num_epochs):
+    epoch_loss = 0
     for batch in dataloader:
         img = batch[0].to(device)
         optimizer.zero_grad()
@@ -103,6 +105,8 @@ for epoch in range(num_epochs):
             loss.backward()
             optimizer.step()
 
+        epoch_loss += loss.item()
+
         # Save the model only if the loss improves globally (across all previous runs)
         if loss.item() < best_loss:
             best_loss = loss.item()
@@ -110,5 +114,9 @@ for epoch in range(num_epochs):
             with open(best_loss_file, "w") as f:
                 f.write(str(best_loss))  
             print(f"New all-time best model saved with loss: {best_loss:.4f}")
+
+    avg_loss = epoch_loss / len(dataloader)
+    scheduler.step(avg_loss)  # Reduce LR if no improvement
+    print(f"Current Learning Rate: {optimizer.param_groups[0]['lr']:.6f}")
 
     print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {loss.item():.4f}')
