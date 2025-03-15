@@ -12,20 +12,25 @@ class Autoencoder(nn.Module):
         super(Autoencoder, self).__init__()
         
         self.encoder = nn.Sequential(
-            nn.Conv2d(3, 8, kernel_size=3, stride=2, padding=1),  # Reduced filters (8 instead of 16)
+            nn.Conv2d(3, 16, kernel_size=3, stride=2, padding=1),
             nn.ReLU(),
-            nn.Conv2d(8, 16, kernel_size=3, stride=2, padding=1),  # Reduced filters (16 instead of 32)
+            nn.BatchNorm2d(16),  # Add BatchNorm
+            nn.Conv2d(16, 32, kernel_size=3, stride=2, padding=1),
             nn.ReLU(),
-            nn.Conv2d(16, 32, kernel_size=3, stride=2, padding=1),  # Reduced filters (32 instead of 64)
-            nn.ReLU()
+            nn.BatchNorm2d(32),
+            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(),
+            nn.BatchNorm2d(64)
         )
-        
+
         self.decoder = nn.Sequential(
+            nn.ConvTranspose2d(64, 32, kernel_size=3, stride=2, padding=1, output_padding=1),
+            nn.ReLU(),
+            nn.BatchNorm2d(32),
             nn.ConvTranspose2d(32, 16, kernel_size=3, stride=2, padding=1, output_padding=1),
             nn.ReLU(),
-            nn.ConvTranspose2d(16, 8, kernel_size=3, stride=2, padding=1, output_padding=1),
-            nn.ReLU(),
-            nn.ConvTranspose2d(8, 3, kernel_size=3, stride=2, padding=1, output_padding=1),
+            nn.BatchNorm2d(16),
+            nn.ConvTranspose2d(16, 3, kernel_size=3, stride=2, padding=1, output_padding=1),
             nn.Sigmoid()
         )
 
@@ -80,7 +85,7 @@ compression_ratio = input_size / encoded_size
 print(f"Compression Ratio: {compression_ratio:.2f}")
 
 # Training loop
-num_epochs = 5
+num_epochs = 20
 for epoch in range(num_epochs):
     for batch in dataloader:
         img = batch[0].to(device)
