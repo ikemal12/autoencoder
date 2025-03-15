@@ -1,4 +1,5 @@
 import torch
+import os
 import numpy as np
 import torch.nn as nn
 import torch.optim as optim
@@ -61,7 +62,16 @@ criterion = RMSELoss() #nn.MSELoss()
 optimizer = optim.Adam(model.parameters(), lr=0.001)
 use_amp = torch.cuda.is_available()
 scaler = torch.amp.GradScaler('cuda') if use_amp else None
-best_loss = float('inf')  
+
+best_loss_file = "best_loss.txt"
+if os.path.exists(best_loss_file):
+    with open(best_loss_file, "r") as f:
+        try:
+            best_loss = float(f.read().strip())
+        except ValueError:
+            best_loss = float('inf')  
+else:
+    best_loss = float('inf')  
 
 # Calculate compression ratio
 input_size = 3 * 152 * 224  
@@ -88,11 +98,12 @@ for epoch in range(num_epochs):
             loss.backward()
             optimizer.step()
 
-        # Save the model only if the loss improves
+        # Save the model only if the loss improves globally (across all previous runs)
         if loss.item() < best_loss:
             best_loss = loss.item()
             torch.save(model.state_dict(), 'autoencoder.pth')
-            print(f"Best model saved with loss: {best_loss:.4f}")
+            with open(best_loss_file, "w") as f:
+                f.write(str(best_loss))  
+            print(f"New all-time best model saved with loss: {best_loss:.4f}")
 
     print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {loss.item():.4f}')
-
