@@ -16,10 +16,9 @@ class Autoencoder(nn.Module):
     def __init__(self):
         super(Autoencoder, self).__init__()
         
-        # Use more efficient channel configurations
         self.encoder = nn.Sequential(
-            nn.Conv2d(3, 32, kernel_size=4, stride=2, padding=1),  # Larger initial channels, bigger kernel
-            nn.LeakyReLU(0.2, inplace=True),  # LeakyReLU with inplace=True saves memory
+            nn.Conv2d(3, 32, kernel_size=4, stride=2, padding=1),  
+            nn.LeakyReLU(0.2, inplace=True),  
             nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=1),
             nn.LeakyReLU(0.2, inplace=True),
             nn.Conv2d(64, 128, kernel_size=4, stride=2, padding=1),
@@ -54,21 +53,35 @@ class HybridLoss(nn.Module):
 
 
 def load_data():
-    subset_1 = np.load("subset_1.npy")
-    subset_2 = np.load("subset_2.npy")
-    subset_3 = np.load("subset_3.npy")
-    data = np.concatenate((subset_1, subset_2, subset_3), axis=0)
-    data = data.reshape(-1, 150, 225, 3)  
-
-    transform = transforms.Compose([
-        #transforms.ToPILImage(),  
-        transforms.ToTensor(),  
-        transforms.Resize((152, 224), antialias=True),  
-    ])
-
-    data_tensor = torch.stack([transform(img) for img in data])
-    dataset = TensorDataset(data_tensor)
-    return dataset
+    # Load data only once and cache it
+    if not hasattr(load_data, 'dataset_cache'):
+        subset_1 = np.load("subset_1.npy", mmap_mode='r')  # Memory-mapped file access
+        subset_2 = np.load("subset_2.npy", mmap_mode='r')
+        subset_3 = np.load("subset_3.npy", mmap_mode='r')
+        
+        # Process in batches to reduce memory pressure
+        batch_size = 1000
+        all_tensors = []
+        
+        transform = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Resize((152, 224), antialias=True),
+        ])
+        
+        for i in range(0, len(subset_1), batch_size):
+            batch = np.concatenate((
+                subset_1[i:i+batch_size], 
+                subset_2[i:i+batch_size] if i < len(subset_2) else np.array([]),
+                subset_3[i:i+batch_size] if i < len(subset_3) else np.array([])
+            ), axis=0)
+            batch = batch.reshape(-1, 150, 225, 3)
+            tensors = torch.stack([transform(img) for img in batch])
+            all_tensors.append(tensors)
+            
+        data_tensor = torch.cat(all_tensors)
+        load_data.dataset_cache = TensorDataset(data_tensor)
+    
+    return load_data.dataset_cache
 
 def train():
     dataset = load_data()
