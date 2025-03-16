@@ -15,13 +15,14 @@ class Autoencoder(nn.Module):
         super(Autoencoder, self).__init__()
         
         self.encoder = nn.Sequential(
-            nn.Conv2d(3, 16, kernel_size=3, stride=2, padding=1),
+            nn.Conv2d(3, 16, kernel_size=3, stride=2, padding=1, groups=1), 
             nn.ReLU(),
-            nn.Conv2d(16, 32, kernel_size=3, stride=2, padding=1),
+            nn.Conv2d(16, 32, kernel_size=3, stride=2, padding=1, groups=1),
             nn.ReLU(),
-            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
+            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1, groups=1),
             nn.ReLU(),
         )
+
         
         self.decoder = nn.Sequential(
             nn.ConvTranspose2d(64, 32, kernel_size=3, stride=2, padding=1, output_padding=1),
@@ -38,9 +39,9 @@ class Autoencoder(nn.Module):
         return decoded
 
 class HybridLoss(nn.Module):
-    def __init__(self, alpha=0.8):
+    def __init__(self, device, alpha=0.8):
         super(HybridLoss, self).__init__()
-        self.ssim = StructuralSimilarityIndexMeasure(data_range=1.0)
+        self.ssim = StructuralSimilarityIndexMeasure(data_range=1.0).to(device)
         self.mse = nn.MSELoss()
         self.alpha = alpha
 
@@ -48,6 +49,7 @@ class HybridLoss(nn.Module):
         ssim_loss = 1 - self.ssim(pred, target)
         mse_loss = self.mse(pred, target)
         return self.alpha * mse_loss + (1 - self.alpha) * ssim_loss
+
 
 def load_data():
     subset_1 = np.load("subset_1.npy")
@@ -68,12 +70,17 @@ def load_data():
 
 def train():
     dataset = load_data()
-    dataloader = DataLoader(dataset, batch_size=64, shuffle=True, num_workers=4, pin_memory=True)
+    dataloader = DataLoader(
+        dataset, batch_size=64, shuffle=True, 
+        num_workers=os.cpu_count() // 2,  
+        pin_memory=True, persistent_workers=True
+    )
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model = Autoencoder().to(device)
-    criterion = HybridLoss()
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
+    model = Autoencoder().to(device, memory_format=torch.channels_last)
+    #model = torch.compile(model)
+    criterion = HybridLoss(device)  
+    optimizer = optim.AdamW(model.parameters(), lr=0.001, betas=(0.95, 0.98))
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=2, factor=0.5)
     use_amp = torch.cuda.is_available()
     scaler = torch.amp.GradScaler('cuda') if use_amp else None
@@ -92,14 +99,14 @@ def train():
     compression_ratio = input_size / encoded_size
     print(f"Compression Ratio: {compression_ratio:.2f}")
 
-    num_epochs = 5
+    num_epochs = 20
     for epoch in range(num_epochs):
         epoch_loss = 0
         for batch in dataloader:
-            img = batch[0].to(device, non_blocking=True)
+            img = batch[0].to(device, non_blocking=True, memory_format=torch.channels_last)
             optimizer.zero_grad()
 
-            with torch.amp.autocast(device_type="cuda") if use_amp else torch.enable_grad():
+            with torch.amp.autocast(device_type="cuda", dtype=torch.float16) if use_amp else torch.enable_grad():
                 recon = model(img)
                 loss = criterion(recon, img)
 
@@ -124,6 +131,7 @@ def train():
         scheduler.step(avg_loss)
         print(f"Current Learning Rate: {optimizer.param_groups[0]['lr']:.6f}")
         print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {loss.item():.4f}')
+
 
 if __name__ == '__main__':
     train()
