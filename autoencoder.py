@@ -7,8 +7,10 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset
 from torchvision import transforms
 from torchmetrics.image import StructuralSimilarityIndexMeasure
+from lion_pytorch import Lion
 
 torch.backends.cudnn.benchmark = True
+torch.backends.cudnn.enabled = True
 
 class Autoencoder(nn.Module):
     def __init__(self):
@@ -72,14 +74,14 @@ def train():
     dataset = load_data()
     dataloader = DataLoader(
         dataset, batch_size=64, shuffle=True, 
-        num_workers=os.cpu_count() // 2,  
+        num_workers=6,  
         pin_memory=True, persistent_workers=True
     )
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = Autoencoder().to(device, memory_format=torch.channels_last)
     criterion = HybridLoss(device)  
-    optimizer = optim.AdamW(model.parameters(), lr=0.01, betas=(0.95, 0.98))
+    optimizer = Lion(model.parameters(), lr=0.001, weight_decay=0.01)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=2, factor=0.5)
     use_amp = torch.cuda.is_available()
     scaler = torch.amp.GradScaler('cuda') if use_amp else None
