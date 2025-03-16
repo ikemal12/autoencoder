@@ -113,6 +113,8 @@ def train():
 
             if use_amp:
                 scaler.scale(loss).backward()
+                scaler.unscale_(optimizer)  # Avoids gradient overflow
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)  # Clip gradients
                 scaler.step(optimizer)
                 scaler.update()
             else:
