@@ -78,9 +78,8 @@ def train():
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = Autoencoder().to(device, memory_format=torch.channels_last)
-    #model = torch.compile(model)
     criterion = HybridLoss(device)  
-    optimizer = optim.AdamW(model.parameters(), lr=0.001, betas=(0.95, 0.98))
+    optimizer = optim.AdamW(model.parameters(), lr=0.01, betas=(0.95, 0.98))
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=2, factor=0.5)
     use_amp = torch.cuda.is_available()
     scaler = torch.amp.GradScaler('cuda') if use_amp else None
@@ -128,9 +127,9 @@ def train():
                 print(f"New all-time best model saved with loss: {best_loss:.4f}")
 
         avg_loss = epoch_loss / len(dataloader)
-        scheduler.step(avg_loss)
+        scheduler.step(avg_loss)  # Use avg_loss here, not loss.item()
         print(f"Current Learning Rate: {optimizer.param_groups[0]['lr']:.6f}")
-        print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {loss.item():.4f}')
+        print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {avg_loss:.4f}')
 
 
 if __name__ == '__main__':
