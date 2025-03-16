@@ -16,22 +16,22 @@ class Autoencoder(nn.Module):
     def __init__(self):
         super(Autoencoder, self).__init__()
         
+        # Use more efficient channel configurations
         self.encoder = nn.Sequential(
-            nn.Conv2d(3, 16, kernel_size=3, stride=2, padding=1, groups=1), 
-            nn.ReLU(),
-            nn.Conv2d(16, 32, kernel_size=3, stride=2, padding=1, groups=1),
-            nn.ReLU(),
-            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1, groups=1),
-            nn.ReLU(),
+            nn.Conv2d(3, 32, kernel_size=4, stride=2, padding=1),  # Larger initial channels, bigger kernel
+            nn.LeakyReLU(0.2, inplace=True),  # LeakyReLU with inplace=True saves memory
+            nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=1),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Conv2d(64, 128, kernel_size=4, stride=2, padding=1),
+            nn.LeakyReLU(0.2, inplace=True),
         )
-
         
         self.decoder = nn.Sequential(
-            nn.ConvTranspose2d(64, 32, kernel_size=3, stride=2, padding=1, output_padding=1),
-            nn.ReLU(),
-            nn.ConvTranspose2d(32, 16, kernel_size=3, stride=2, padding=1, output_padding=1),
-            nn.ReLU(),
-            nn.ConvTranspose2d(16, 3, kernel_size=3, stride=2, padding=1, output_padding=1),
+            nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.ConvTranspose2d(64, 32, kernel_size=4, stride=2, padding=1),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.ConvTranspose2d(32, 3, kernel_size=4, stride=2, padding=1),
             nn.Sigmoid()
         )
 
@@ -61,9 +61,9 @@ def load_data():
     data = data.reshape(-1, 150, 225, 3)  
 
     transform = transforms.Compose([
-        transforms.ToPILImage(),  
-        transforms.Resize((152, 224)),  
-        transforms.ToTensor()  
+        #transforms.ToPILImage(),  
+        transforms.ToTensor(),  
+        transforms.Resize((152, 224), antialias=True),  
     ])
 
     data_tensor = torch.stack([transform(img) for img in data])
@@ -73,7 +73,7 @@ def load_data():
 def train():
     dataset = load_data()
     dataloader = DataLoader(
-        dataset, batch_size=64, shuffle=True, 
+        dataset, batch_size=128, shuffle=True, 
         num_workers=6,  
         pin_memory=True, persistent_workers=True
     )
@@ -81,7 +81,7 @@ def train():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = Autoencoder().to(device, memory_format=torch.channels_last)
     criterion = HybridLoss(device)  
-    optimizer = Lion(model.parameters(), lr=0.001, weight_decay=0.01)
+    optimizer = Lion(model.parameters(), lr=0.0001, weight_decay=0.01)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=2, factor=0.5)
     use_amp = torch.cuda.is_available()
     scaler = torch.amp.GradScaler('cuda') if use_amp else None
@@ -113,8 +113,8 @@ def train():
 
             if use_amp:
                 scaler.scale(loss).backward()
-                scaler.unscale_(optimizer)  # Avoids gradient overflow
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)  # Clip gradients
+                scaler.unscale_(optimizer)  
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0) 
                 scaler.step(optimizer)
                 scaler.update()
             else:
@@ -131,7 +131,7 @@ def train():
                 print(f"New all-time best model saved with loss: {best_loss:.4f}")
 
         avg_loss = epoch_loss / len(dataloader)
-        scheduler.step(avg_loss)  # Use avg_loss here, not loss.item()
+        scheduler.step(avg_loss) 
         print(f"Current Learning Rate: {optimizer.param_groups[0]['lr']:.6f}")
         print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {avg_loss:.4f}')
 
