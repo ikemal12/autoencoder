@@ -6,6 +6,9 @@ import torch.optim as optim
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset
 from torchvision import transforms
+from torchmetrics.image import StructuralSimilarityIndexMeasure
+
+torch.backends.cudnn.benchmark = True
 
 class Autoencoder(nn.Module):
     def __init__(self):
@@ -14,22 +17,17 @@ class Autoencoder(nn.Module):
         self.encoder = nn.Sequential(
             nn.Conv2d(3, 16, kernel_size=3, stride=2, padding=1),
             nn.ReLU(),
-            nn.BatchNorm2d(16),  # Add BatchNorm
             nn.Conv2d(16, 32, kernel_size=3, stride=2, padding=1),
             nn.ReLU(),
-            nn.BatchNorm2d(32),
             nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
             nn.ReLU(),
-            nn.BatchNorm2d(64)
         )
-
+        
         self.decoder = nn.Sequential(
             nn.ConvTranspose2d(64, 32, kernel_size=3, stride=2, padding=1, output_padding=1),
             nn.ReLU(),
-            nn.BatchNorm2d(32),
             nn.ConvTranspose2d(32, 16, kernel_size=3, stride=2, padding=1, output_padding=1),
             nn.ReLU(),
-            nn.BatchNorm2d(16),
             nn.ConvTranspose2d(16, 3, kernel_size=3, stride=2, padding=1, output_padding=1),
             nn.Sigmoid()
         )
@@ -39,84 +37,93 @@ class Autoencoder(nn.Module):
         decoded = self.decoder(encoded)
         return decoded
 
-    
-class RMSELoss(nn.Module):
+class HybridLoss(nn.Module):
+    def __init__(self, alpha=0.8):
+        super(HybridLoss, self).__init__()
+        self.ssim = StructuralSimilarityIndexMeasure(data_range=1.0)
+        self.mse = nn.MSELoss()
+        self.alpha = alpha
+
     def forward(self, pred, target):
-        return torch.sqrt(F.mse_loss(pred, target))
+        ssim_loss = 1 - self.ssim(pred, target)
+        mse_loss = self.mse(pred, target)
+        return self.alpha * mse_loss + (1 - self.alpha) * ssim_loss
 
-# Loading data 
-subset_1 = np.load("subset_1.npy")
-subset_2 = np.load("subset_2.npy")
-subset_3 = np.load("subset_3.npy")
-data = np.concatenate((subset_1, subset_2, subset_3), axis=0)
-data = data.reshape(-1, 150, 225, 3)  
+def load_data():
+    subset_1 = np.load("subset_1.npy")
+    subset_2 = np.load("subset_2.npy")
+    subset_3 = np.load("subset_3.npy")
+    data = np.concatenate((subset_1, subset_2, subset_3), axis=0)
+    data = data.reshape(-1, 150, 225, 3)  
 
-transform = transforms.Compose([
-    transforms.ToPILImage(),  
-    transforms.Resize((152, 224)),  
-    transforms.ToTensor()  
-])
+    transform = transforms.Compose([
+        transforms.ToPILImage(),  
+        transforms.Resize((152, 224)),  
+        transforms.ToTensor()  
+    ])
 
-data_tensor = torch.stack([transform(img) for img in data])
-dataset = TensorDataset(data_tensor)
-dataloader = DataLoader(dataset, batch_size=64, shuffle=True)
+    data_tensor = torch.stack([transform(img) for img in data])
+    dataset = TensorDataset(data_tensor)
+    return dataset
 
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-model = Autoencoder().to(device)
-criterion = RMSELoss() #nn.MSELoss()
-optimizer = optim.Adam(model.parameters(), lr=0.001)
-scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=2, factor=0.5)
-use_amp = torch.cuda.is_available()
-scaler = torch.amp.GradScaler('cuda') if use_amp else None
+def train():
+    dataset = load_data()
+    dataloader = DataLoader(dataset, batch_size=64, shuffle=True, num_workers=4, pin_memory=True)
 
-best_loss_file = "best_loss.txt"
-if os.path.exists(best_loss_file):
-    with open(best_loss_file, "r") as f:
-        try:
-            best_loss = float(f.read().strip())
-        except ValueError:
-            best_loss = float('inf')  
-else:
-    best_loss = float('inf')  
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model = Autoencoder().to(device)
+    criterion = HybridLoss()
+    optimizer = optim.Adam(model.parameters(), lr=0.001)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=2, factor=0.5)
+    use_amp = torch.cuda.is_available()
+    scaler = torch.amp.GradScaler('cuda') if use_amp else None
 
-# Calculate compression ratio
-input_size = 3 * 152 * 224  
-encoded_size = 32 * 19 * 28  
-compression_ratio = input_size / encoded_size
-print(f"Compression Ratio: {compression_ratio:.2f}")
+    best_loss_file = "best_loss.txt"
+    best_loss = float('inf')
+    if os.path.exists(best_loss_file):
+        with open(best_loss_file, "r") as f:
+            try:
+                best_loss = float(f.read().strip())
+            except ValueError:
+                pass  
 
-# Training loop
-num_epochs = 10
-for epoch in range(num_epochs):
-    epoch_loss = 0
-    for batch in dataloader:
-        img = batch[0].to(device)
-        optimizer.zero_grad()
+    input_size = 3 * 152 * 224  
+    encoded_size = 32 * 19 * 28  
+    compression_ratio = input_size / encoded_size
+    print(f"Compression Ratio: {compression_ratio:.2f}")
 
-        with torch.amp.autocast(device_type="cuda") if use_amp else torch.enable_grad():
-            recon = model(img)
-            loss = criterion(recon, img)
+    num_epochs = 5
+    for epoch in range(num_epochs):
+        epoch_loss = 0
+        for batch in dataloader:
+            img = batch[0].to(device, non_blocking=True)
+            optimizer.zero_grad()
 
-        if use_amp:
-            scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
-        else:
-            loss.backward()
-            optimizer.step()
+            with torch.amp.autocast(device_type="cuda") if use_amp else torch.enable_grad():
+                recon = model(img)
+                loss = criterion(recon, img)
 
-        epoch_loss += loss.item()
+            if use_amp:
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                loss.backward()
+                optimizer.step()
 
-        # Save the model only if the loss improves globally (across all previous runs)
-        if loss.item() < best_loss:
-            best_loss = loss.item()
-            torch.save(model.state_dict(), 'autoencoder.pth')
-            with open(best_loss_file, "w") as f:
-                f.write(str(best_loss))  
-            print(f"New all-time best model saved with loss: {best_loss:.4f}")
+            epoch_loss += loss.item()
 
-    avg_loss = epoch_loss / len(dataloader)
-    scheduler.step(avg_loss)  # Reduce LR if no improvement
-    print(f"Current Learning Rate: {optimizer.param_groups[0]['lr']:.6f}")
+            if loss.item() < best_loss:
+                best_loss = loss.item()
+                torch.save(model.state_dict(), 'autoencoder.pth')
+                with open(best_loss_file, "w") as f:
+                    f.write(str(best_loss))  
+                print(f"New all-time best model saved with loss: {best_loss:.4f}")
 
-    print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {loss.item():.4f}')
+        avg_loss = epoch_loss / len(dataloader)
+        scheduler.step(avg_loss)
+        print(f"Current Learning Rate: {optimizer.param_groups[0]['lr']:.6f}")
+        print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {loss.item():.4f}')
+
+if __name__ == '__main__':
+    train()
