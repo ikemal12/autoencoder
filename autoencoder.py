@@ -8,9 +8,11 @@ from torch.utils.data import DataLoader, TensorDataset
 from torchvision import transforms
 from torchmetrics.image import StructuralSimilarityIndexMeasure
 from lion_pytorch import Lion
+from torch.cuda.amp import autocast, GradScaler
 
 torch.backends.cudnn.benchmark = True
 torch.backends.cudnn.enabled = True
+torch.set_float32_matmul_precision('high')  # Use TF32 on Ampere GPUs for faster training
 
 class Autoencoder(nn.Module):
     def __init__(self):
@@ -52,101 +54,157 @@ class HybridLoss(nn.Module):
         return self.alpha * mse_loss + (1 - self.alpha) * ssim_loss
 
 
-def load_data():
-    # Load data only once and cache it
-    if not hasattr(load_data, 'dataset_cache'):
-        subset_1 = np.load("subset_1.npy", mmap_mode='r')  # Memory-mapped file access
-        subset_2 = np.load("subset_2.npy", mmap_mode='r')
-        subset_3 = np.load("subset_3.npy", mmap_mode='r')
-        
-        # Process in batches to reduce memory pressure
-        batch_size = 1000
-        all_tensors = []
-        
-        transform = transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Resize((152, 224), antialias=True),
-        ])
-        
-        for i in range(0, len(subset_1), batch_size):
-            batch = np.concatenate((
-                subset_1[i:i+batch_size], 
-                subset_2[i:i+batch_size] if i < len(subset_2) else np.array([]),
-                subset_3[i:i+batch_size] if i < len(subset_3) else np.array([])
-            ), axis=0)
-            batch = batch.reshape(-1, 150, 225, 3)
-            tensors = torch.stack([transform(img) for img in batch])
-            all_tensors.append(tensors)
-            
-        data_tensor = torch.cat(all_tensors)
-        load_data.dataset_cache = TensorDataset(data_tensor)
+def load_data(cache_tensors=True):
+    cache_file = "processed_data_tensors.pt"
     
-    return load_data.dataset_cache
+    if cache_tensors and os.path.exists(cache_file):
+        data_tensor = torch.load(cache_file)
+        dataset = TensorDataset(data_tensor)
+        return dataset
+    
+    subset_1 = np.load("subset_1.npy", mmap_mode='r') 
+    subset_2 = np.load("subset_2.npy", mmap_mode='r')
+    subset_3 = np.load("subset_3.npy", mmap_mode='r')
+    
+    batch_size = 1000
+    all_tensors = []
+    
+    transform = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Resize((152, 224), antialias=True),
+    ])
+    
+    total_samples = len(subset_1) + len(subset_2) + len(subset_3)
+    processed = 0
+    
+    # Process subset_1
+    for i in range(0, len(subset_1), batch_size):
+        batch = subset_1[i:i+batch_size].reshape(-1, 150, 225, 3)
+        tensors = torch.stack([transform(img) for img in batch])
+        all_tensors.append(tensors)
+        processed += len(batch)
+        print(f"Processed {processed}/{total_samples} images")
+    
+    # Process subset_2
+    for i in range(0, len(subset_2), batch_size):
+        batch = subset_2[i:i+batch_size].reshape(-1, 150, 225, 3)
+        tensors = torch.stack([transform(img) for img in batch])
+        all_tensors.append(tensors)
+        processed += len(batch)
+        print(f"Processed {processed}/{total_samples} images")
+    
+    # Process subset_3
+    for i in range(0, len(subset_3), batch_size):
+        batch = subset_3[i:i+batch_size].reshape(-1, 150, 225, 3)
+        tensors = torch.stack([transform(img) for img in batch])
+        all_tensors.append(tensors)
+        processed += len(batch)
+        print(f"Processed {processed}/{total_samples} images")
+    
+    data_tensor = torch.cat(all_tensors)
+    
+    if cache_tensors:
+        torch.save(data_tensor, cache_file)
+    
+    dataset = TensorDataset(data_tensor)
+    return dataset
 
 def train():
-    dataset = load_data()
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    prefetch_factor = 2
+    num_workers = min(6, os.cpu_count() or 4)
+    
+    dataset = load_data(cache_tensors=True)
     dataloader = DataLoader(
-        dataset, batch_size=128, shuffle=True, 
-        num_workers=6,  
-        pin_memory=True, persistent_workers=True
+        dataset, 
+        batch_size=128,  
+        shuffle=True, 
+        num_workers=num_workers,
+        pin_memory=True, 
+        persistent_workers=True,
+        prefetch_factor=prefetch_factor
     )
 
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = Autoencoder().to(device, memory_format=torch.channels_last)
-    criterion = HybridLoss(device)  
-    optimizer = Lion(model.parameters(), lr=0.0001, weight_decay=0.01)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', patience=2, factor=0.5)
+    
+    # Print model parameters and compression ratio
+    input_size = 3 * 152 * 224
+    encoder_output = model.encoder(torch.zeros(1, 3, 152, 224).to(device, memory_format=torch.channels_last))
+    encoded_size = encoder_output.numel()
+    compression_ratio = input_size / encoded_size
+    print(f"Compression Ratio: {compression_ratio:.2f}")
+    print(f"Total model parameters: {sum(p.numel() for p in model.parameters())}")
+    
+    criterion = HybridLoss(device)
+    optimizer = Lion(model.parameters(), lr=0.005, weight_decay=0.01)  
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode='min', patience=2, factor=0.5
+    )  
+    
     use_amp = torch.cuda.is_available()
-    scaler = torch.amp.GradScaler('cuda') if use_amp else None
-
+    scaler = torch.amp.GradScaler() if use_amp else None
+    
     best_loss_file = "best_loss.txt"
     best_loss = float('inf')
     if os.path.exists(best_loss_file):
         with open(best_loss_file, "r") as f:
             try:
                 best_loss = float(f.read().strip())
+                print(f"Previous best loss: {best_loss:.4f}")
             except ValueError:
-                pass  
+                pass
 
-    input_size = 3 * 152 * 224  
-    encoded_size = 32 * 19 * 28  
-    compression_ratio = input_size / encoded_size
-    print(f"Compression Ratio: {compression_ratio:.2f}")
-
+    # Training loop
     num_epochs = 20
     for epoch in range(num_epochs):
+        model.train()
         epoch_loss = 0
-        for batch in dataloader:
+        running_loss = 0
+        log_interval = 10  # Display progress every 10 batches
+        
+        for batch_idx, batch in enumerate(dataloader):
             img = batch[0].to(device, non_blocking=True, memory_format=torch.channels_last)
-            optimizer.zero_grad()
-
-            with torch.amp.autocast(device_type="cuda", dtype=torch.float16) if use_amp else torch.enable_grad():
+            optimizer.zero_grad(set_to_none=True) 
+            
+            # Use mixed precision training
+            with torch.amp.autocast(device_type=device.type) if use_amp else torch.enable_grad():
                 recon = model(img)
                 loss = criterion(recon, img)
-
+            
             if use_amp:
                 scaler.scale(loss).backward()
-                scaler.unscale_(optimizer)  
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0) 
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 scaler.step(optimizer)
                 scaler.update()
             else:
                 loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 optimizer.step()
-
-            epoch_loss += loss.item()
-
-            if loss.item() < best_loss:
-                best_loss = loss.item()
-                torch.save(model.state_dict(), 'autoencoder.pth')
+            
+            # Record loss
+            current_loss = loss.item()
+            epoch_loss += current_loss
+            running_loss += current_loss
+            
+            # Display progress
+            if (batch_idx + 1) % log_interval == 0:
+                avg_running_loss = running_loss / log_interval
+                running_loss = 0
+                print(f"Epoch {epoch+1}/{num_epochs} | Batch {batch_idx+1}/{len(dataloader)} | Loss: {avg_running_loss:.4f} | LR: {optimizer.param_groups[0]['lr']:.6f}")
+            
+            # Save best model (with a new filename to avoid conflicts)
+            if current_loss < best_loss:
+                best_loss = current_loss
+                torch.save(model.state_dict(), 'autoencoder_new.pth')
                 with open(best_loss_file, "w") as f:
-                    f.write(str(best_loss))  
-                print(f"New all-time best model saved with loss: {best_loss:.4f}")
-
+                    f.write(str(best_loss))
+                print(f"New best model saved with loss: {best_loss:.4f}")
+                
+        # Report epoch stats
         avg_loss = epoch_loss / len(dataloader)
-        scheduler.step(avg_loss) 
-        print(f"Current Learning Rate: {optimizer.param_groups[0]['lr']:.6f}")
-        print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {avg_loss:.4f}')
+        scheduler.step(avg_loss)  
+        print(f'Epoch [{epoch+1}/{num_epochs}], Average Loss: {avg_loss:.4f}, Current LR: {optimizer.param_groups[0]["lr"]:.6f}')
 
 
 if __name__ == '__main__':
