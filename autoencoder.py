@@ -113,16 +113,22 @@ class ResidualBlock(nn.Module):
 
 
 class HybridLoss(nn.Module):
-    def __init__(self, device, alpha=0.8):
+    def __init__(self, device, alpha=0.8, beta=0.1, gamma=0.2):
         super(HybridLoss, self).__init__()
         self.ssim = StructuralSimilarityIndexMeasure(data_range=1.0).to(device)
         self.mse = nn.MSELoss()
         self.alpha = alpha
+        self.beta = beta
+        self.gamma = gamma
 
-    def forward(self, pred, target):
+    def forward(self, pred, target, perceptual_loss=None):
         ssim_loss = 1 - self.ssim(pred, target)
         mse_loss = self.mse(pred, target)
-        return self.alpha * mse_loss + (1 - self.alpha) * ssim_loss
+
+        if perceptual_loss is not None:
+            return self.alpha * mse_loss + self.beta * ssim_loss + self.gamma * perceptual_loss
+        else:
+            return (self.alpha / (self.alpha + self.beta)) * mse_loss + (self.beta / (self.alpha + self.beta)) * ssim_loss
 
 
 def load_data(cache_tensors=True):
