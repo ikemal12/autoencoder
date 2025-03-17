@@ -83,29 +83,9 @@ def load_data(cache_tensors=True):
     total_samples = len(subset_1) + len(subset_2) + len(subset_3)
     processed = 0
     
-    # Process subset_1
-    for i in range(0, len(subset_1), batch_size):
-        batch = subset_1[i:i+batch_size].reshape(-1, 150, 225, 3)
-        tensors = torch.stack([transform(img) for img in batch])
-        all_tensors.append(tensors)
-        processed += len(batch)
-        print(f"Processed {processed}/{total_samples} images")
-    
-    # Process subset_2
-    for i in range(0, len(subset_2), batch_size):
-        batch = subset_2[i:i+batch_size].reshape(-1, 150, 225, 3)
-        tensors = torch.stack([transform(img) for img in batch])
-        all_tensors.append(tensors)
-        processed += len(batch)
-        print(f"Processed {processed}/{total_samples} images")
-    
-    # Process subset_3
-    for i in range(0, len(subset_3), batch_size):
-        batch = subset_3[i:i+batch_size].reshape(-1, 150, 225, 3)
-        tensors = torch.stack([transform(img) for img in batch])
-        all_tensors.append(tensors)
-        processed += len(batch)
-        print(f"Processed {processed}/{total_samples} images")
+    process_subset(subset_1, batch_size, all_tensors, transform, total_samples)
+    process_subset(subset_2, batch_size, all_tensors, transform, total_samples)
+    process_subset(subset_3, batch_size, all_tensors, transform, total_samples)
     
     data_tensor = torch.cat(all_tensors)
     
@@ -115,15 +95,25 @@ def load_data(cache_tensors=True):
     dataset = TensorDataset(data_tensor)
     return dataset
 
+
+def process_subset(subset, batch_size, all_tensors, transform, total_samples):
+    for i in range(0, len(subset), batch_size):
+        batch = subset[i:i+batch_size].reshape(-1, 150, 225, 3)
+        tensors = torch.stack([transform(img) for img in batch])
+        all_tensors.append(tensors)
+        processed += len(batch)
+        print(f"Processed {processed}/{total_samples} images")
+
+
 def train():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    prefetch_factor = 2
-    num_workers = min(6, os.cpu_count() or 4)
+    prefetch_factor = 4
+    num_workers = min(8, os.cpu_count() or 4)
     
     dataset = load_data(cache_tensors=True)
     dataloader = DataLoader(
         dataset, 
-        batch_size=128,  
+        batch_size=256,  
         shuffle=True, 
         num_workers=num_workers,
         pin_memory=True, 
@@ -142,7 +132,7 @@ def train():
     print(f"Total model parameters: {sum(p.numel() for p in model.parameters())}")
     
     criterion = HybridLoss(device, alpha=0.7)
-    optimizer = Lion(model.parameters(), lr=0.002, weight_decay=0.005)  
+    optimizer = Lion(model.parameters(), lr=0.0005, weight_decay=0.005)  
     scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(
         optimizer, 
         T_0=5,  # Restart every 5 epochs
