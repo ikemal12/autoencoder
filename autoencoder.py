@@ -169,6 +169,7 @@ def load_data(cache_tensors=True):
 
 
 def process_subset(subset, batch_size, all_tensors, transform, total_samples):
+    processed = 0
     for i in range(0, len(subset), batch_size):
         batch = subset[i:i+batch_size].reshape(-1, 150, 225, 3)
         tensors = torch.stack([transform(img) for img in batch])
@@ -183,8 +184,14 @@ def train():
     num_workers = min(8, os.cpu_count() or 4)
     
     dataset = load_data(cache_tensors=True)
-    dataloader = DataLoader(
-        dataset, 
+    
+    # Split dataset into train and validation
+    train_size = int(0.9 * len(dataset))
+    val_size = len(dataset) - train_size
+    train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
+    
+    train_loader = DataLoader(
+        train_dataset, 
         batch_size=256,  
         shuffle=True, 
         num_workers=num_workers,
@@ -192,8 +199,18 @@ def train():
         persistent_workers=True,
         prefetch_factor=prefetch_factor
     )
+    
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=256,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=True,
+        persistent_workers=True,
+        prefetch_factor=prefetch_factor
+    )
 
-    model = Autoencoder().to(device, memory_format=torch.channels_last)
+    model = Autoencoder(latent_dim=96, use_attention=True).to(device, memory_format=torch.channels_last)
     
     # Print model parameters and compression ratio
     input_size = 3 * 152 * 224
@@ -203,21 +220,35 @@ def train():
     print(f"Compression Ratio: {compression_ratio:.2f}")
     print(f"Total model parameters: {sum(p.numel() for p in model.parameters())}")
     
-    criterion = HybridLoss(device, alpha=0.7)
-    optimizer = Lion(model.parameters(), lr=0.0005, weight_decay=0.005)  
-    scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(
-        optimizer, 
-        T_0=5,  # Restart every 5 epochs
-        T_mult=1,
-        eta_min=1e-5,
-    ) 
+    criterion = HybridLoss(device, alpha=0.7, beta=0.2, gamma=0.1)
+    optimizer = Lion(model.parameters(), lr=0.0025, weight_decay=0.003)  
+    scheduler = optim.lr_scheduler.OneCycleLR(
+        optimizer,
+        max_lr=0.003,
+        epochs=25,
+        steps_per_epoch=len(train_loader),
+        pct_start=0.1,
+        div_factor=25,
+        final_div_factor=1000
+    )
     
     use_amp = torch.cuda.is_available()
-    scaler = torch.amp.GradScaler() if use_amp else None
+    scaler = torch.amp.GradScaler(enabled=use_amp)
     
     best_loss_file = "best_loss.txt"
+    checkpoint_file = "autoencoder_checkpoint.pth"
     best_loss = float('inf')
-    if os.path.exists(best_loss_file):
+    start_epoch = 0
+
+    if os.path.exists(checkpoint_file):
+        checkpoint = torch.load(checkpoint_file)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])  
+        scheduler.load_state_dict(checkpoint['scheduler_state_dict'])  
+        start_epoch = checkpoint['epoch'] + 1
+        best_loss = checkpoint['best_loss']
+        print(f"Resuming from epoch {start_epoch} with best loss: {best_loss:.4f}")
+    elif os.path.exists(best_loss_file):
         with open(best_loss_file, "r") as f:
             try:
                 best_loss = float(f.read().strip())
@@ -226,55 +257,89 @@ def train():
                 pass
 
     # Training loop
-    num_epochs = 20
-    for epoch in range(num_epochs):
+    num_epochs = 25
+    patience = 5
+    patience_counter = 0
+
+    for epoch in range(start_epoch, num_epochs):
         model.train()
         epoch_loss = 0
         running_loss = 0
         log_interval = 10  # Display progress every 10 batches
         
-        for batch_idx, batch in enumerate(dataloader):
+        for batch_idx, batch in enumerate(train_loader):
             img = batch[0].to(device, non_blocking=True, memory_format=torch.channels_last)
             optimizer.zero_grad(set_to_none=True) 
             
-            with torch.amp.autocast(device_type=device.type) if use_amp else torch.enable_grad():
+            with torch.amp.autocast(device_type=device.type, enabled=use_amp):
                 recon = model(img)
                 loss = criterion(recon, img)
             
-            if use_amp:
-                scaler.scale(loss).backward()
-                scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                scaler.step(optimizer)
-                scaler.update()
-            else:
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                optimizer.step()
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            scaler.step(optimizer)
+            scaler.update()
+            scheduler.step()
             
             current_loss = loss.item()
             epoch_loss += current_loss
             running_loss += current_loss
             
-            # Display progress
             if (batch_idx + 1) % log_interval == 0:
                 avg_running_loss = running_loss / log_interval
                 running_loss = 0
-                print(f"Epoch {epoch+1}/{num_epochs} | Batch {batch_idx+1}/{len(dataloader)} | Loss: {avg_running_loss:.4f} | LR: {optimizer.param_groups[0]['lr']:.6f}")
-            
-            # Save best model (with a new filename to avoid conflicts)
-            if current_loss < best_loss:
-                best_loss = current_loss
-                torch.save(model.state_dict(), 'autoencoder_new.pth')
-                with open(best_loss_file, "w") as f:
-                    f.write(str(best_loss))
-                print(f"New best model saved with loss: {best_loss:.4f}")
-                
-        # Report epoch stats
-        avg_loss = epoch_loss / len(dataloader)
-        scheduler.step(avg_loss)  
-        print(f'Epoch [{epoch+1}/{num_epochs}], Average Loss: {avg_loss:.4f}, Current LR: {optimizer.param_groups[0]["lr"]:.6f}')
+                print(f"Epoch {epoch+1}/{num_epochs} | Batch {batch_idx+1}/{len(train_loader)} | Loss: {avg_running_loss:.4f} | LR: {optimizer.param_groups[0]['lr']:.6f}")
+        
+        # Save model periodically
+        if (epoch + 1) % 1 == 0:
+            torch.save({
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'scheduler_state_dict': scheduler.state_dict(),
+                'best_loss': best_loss,
+            }, "autoencoder_checkpoint.pth")
 
+        # Validation phase
+        model.eval()
+        val_loss = 0
+        
+        with torch.no_grad():
+            for batch in val_loader:
+                img = batch[0].to(device, non_blocking=True, memory_format=torch.channels_last)
+                with torch.amp.autocast(device_type=device.type, enabled=use_amp):
+                    recon = model(img)
+                    loss = criterion(recon, img)
+                val_loss += loss.item()
+        
+        val_loss /= len(val_loader)
+        avg_train_loss = epoch_loss / len(train_loader)
+        
+        # Report epoch stats
+        print(f'Epoch [{epoch+1}/{num_epochs}], Train Loss: {avg_train_loss:.4f}, Val Loss: {val_loss:.4f}, LR: {optimizer.param_groups[0]["lr"]:.6f}')
+            
+        # Save best model
+        if val_loss < best_loss:
+            best_loss = val_loss
+            torch.save({
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'scheduler_state_dict': scheduler.state_dict(),
+                'best_loss': best_loss,
+            }, 'autoencoder_best.pth')
+            with open(best_loss_file, "w") as f:
+                f.write(str(best_loss))
+            print(f"New best model saved with loss: {best_loss:.4f}")
+            patience_counter = 0
+        else:
+            patience_counter += 1
+
+        # Early stopping
+        if patience_counter >= patience:
+            print(f"Early stopping triggered after {epoch+1} epochs")
+            break
 
 if __name__ == '__main__':
     train()
