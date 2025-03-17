@@ -12,7 +12,7 @@ from torch.cuda.amp import autocast, GradScaler
 
 torch.backends.cudnn.benchmark = True
 torch.backends.cudnn.enabled = True
-torch.set_float32_matmul_precision('high')  # Use TF32 on Ampere GPUs for faster training
+torch.set_float32_matmul_precision('high')  
 
 class Autoencoder(nn.Module):
     def __init__(self):
@@ -20,17 +20,22 @@ class Autoencoder(nn.Module):
         
         self.encoder = nn.Sequential(
             nn.Conv2d(3, 32, kernel_size=4, stride=2, padding=1),  
+            nn.BatchNorm2d(32),
             nn.LeakyReLU(0.2, inplace=True),  
             nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=1),
+            nn.BatchNorm2d(64),
             nn.LeakyReLU(0.2, inplace=True),
             nn.Conv2d(64, 128, kernel_size=4, stride=2, padding=1),
+            nn.BatchNorm2d(128),
             nn.LeakyReLU(0.2, inplace=True),
         )
         
         self.decoder = nn.Sequential(
             nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1),
+            nn.BatchNorm2d(64),
             nn.LeakyReLU(0.2, inplace=True),
             nn.ConvTranspose2d(64, 32, kernel_size=4, stride=2, padding=1),
+            nn.BatchNorm2d(32), 
             nn.LeakyReLU(0.2, inplace=True),
             nn.ConvTranspose2d(32, 3, kernel_size=4, stride=2, padding=1),
             nn.Sigmoid()
@@ -55,6 +60,7 @@ class HybridLoss(nn.Module):
 
 
 def load_data(cache_tensors=True):
+    # Cache dataset as tensors for faster access"
     cache_file = "processed_data_tensors.pt"
     
     if cache_tensors and os.path.exists(cache_file):
@@ -135,11 +141,14 @@ def train():
     print(f"Compression Ratio: {compression_ratio:.2f}")
     print(f"Total model parameters: {sum(p.numel() for p in model.parameters())}")
     
-    criterion = HybridLoss(device)
-    optimizer = Lion(model.parameters(), lr=0.005, weight_decay=0.01)  
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='min', patience=2, factor=0.5
-    )  
+    criterion = HybridLoss(device, alpha=0.7)
+    optimizer = Lion(model.parameters(), lr=0.002, weight_decay=0.005)  
+    scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(
+        optimizer, 
+        T_0=5,  # Restart every 5 epochs
+        T_mult=1,
+        eta_min=1e-5,
+    ) 
     
     use_amp = torch.cuda.is_available()
     scaler = torch.amp.GradScaler() if use_amp else None
@@ -166,7 +175,6 @@ def train():
             img = batch[0].to(device, non_blocking=True, memory_format=torch.channels_last)
             optimizer.zero_grad(set_to_none=True) 
             
-            # Use mixed precision training
             with torch.amp.autocast(device_type=device.type) if use_amp else torch.enable_grad():
                 recon = model(img)
                 loss = criterion(recon, img)
@@ -182,7 +190,6 @@ def train():
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 optimizer.step()
             
-            # Record loss
             current_loss = loss.item()
             epoch_loss += current_loss
             running_loss += current_loss
