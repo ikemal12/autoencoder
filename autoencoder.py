@@ -14,6 +14,7 @@ torch.backends.cudnn.benchmark = True
 torch.backends.cudnn.enabled = True
 torch.set_float32_matmul_precision('high')  
 
+
 class Autoencoder(nn.Module):
     def __init__(self, latent_dim=128, use_attention=True):
         super(Autoencoder, self).__init__()
@@ -26,16 +27,27 @@ class Autoencoder(nn.Module):
             nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=1),
             nn.BatchNorm2d(64),
             nn.LeakyReLU(0.2, inplace=True),
+            ResidualBlock(64),
 
             nn.Conv2d(64, 128, kernel_size=4, stride=2, padding=1),
             nn.BatchNorm2d(128),
             nn.LeakyReLU(0.2, inplace=True),
+            ResidualBlock(128),
+
+            nn.Conv2d(128, latent_dim, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(latent_dim)
         )
         
         self.decoder = nn.Sequential(
+            nn.ConvTranspose2d(latent_dim, 128, kernel_size=3, stride=1, padding=1),
+            nn.BatchNorm2d(128),
+            nn.LeakyReLU(0.2, inplace=True),
+            ResidualBlock(128),
+
             nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1),
             nn.BatchNorm2d(64),
             nn.LeakyReLU(0.2, inplace=True),
+            ResidualBlock(64),
 
             nn.ConvTranspose2d(64, 32, kernel_size=4, stride=2, padding=1),
             nn.BatchNorm2d(32), 
@@ -56,6 +68,7 @@ class Autoencoder(nn.Module):
         decoded = self.decoder(encoded)
         return decoded
     
+
 class SelfAttention(nn.Module):
     def __init__(self, in_dim):
         super().__init__()
@@ -79,6 +92,25 @@ class SelfAttention(nn.Module):
 
         out = self.gamma * out + x
         return out
+    
+
+class ResidualBlock(nn.Module):
+    def __init__(self, channels):
+        super().__init__()
+        self.conv1 = nn.Conv2d(channels, channels, kernel_size=3, padding=1)
+        self.bn1 = nn.BatchNorm2d(channels)
+        self.conv2 = nn.Conv2d(channels, channels, kernel_size=3, padding=1)
+        self.bn2 = nn.BatchNorm2d(channels)
+        self.relu = nn.LeakyReLU(0.2, inplace=True)
+
+    def forward(self, x):
+        residual = x
+        out = self.relu(self.bn1(self.conv1(x)))
+        out = self.bn2(self.conv2(out))
+        out += residual
+        out = self.relu(out)
+        return out
+
 
 class HybridLoss(nn.Module):
     def __init__(self, device, alpha=0.8):
