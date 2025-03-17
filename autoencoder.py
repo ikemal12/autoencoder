@@ -15,16 +15,18 @@ torch.backends.cudnn.enabled = True
 torch.set_float32_matmul_precision('high')  
 
 class Autoencoder(nn.Module):
-    def __init__(self):
+    def __init__(self, latent_dim=128, use_attention=True):
         super(Autoencoder, self).__init__()
         
         self.encoder = nn.Sequential(
             nn.Conv2d(3, 32, kernel_size=4, stride=2, padding=1),  
             nn.BatchNorm2d(32),
             nn.LeakyReLU(0.2, inplace=True),  
+
             nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=1),
             nn.BatchNorm2d(64),
             nn.LeakyReLU(0.2, inplace=True),
+
             nn.Conv2d(64, 128, kernel_size=4, stride=2, padding=1),
             nn.BatchNorm2d(128),
             nn.LeakyReLU(0.2, inplace=True),
@@ -34,17 +36,49 @@ class Autoencoder(nn.Module):
             nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1),
             nn.BatchNorm2d(64),
             nn.LeakyReLU(0.2, inplace=True),
+
             nn.ConvTranspose2d(64, 32, kernel_size=4, stride=2, padding=1),
             nn.BatchNorm2d(32), 
             nn.LeakyReLU(0.2, inplace=True),
+
             nn.ConvTranspose2d(32, 3, kernel_size=4, stride=2, padding=1),
             nn.Sigmoid()
         )
 
+        self.use_attention = use_attention
+        if use_attention:
+            self.attention = SelfAttention(latent_dim)
+
     def forward(self, x):
         encoded = self.encoder(x)
+        if self.use_attention:
+            encoded = self.attention(encoded)
         decoded = self.decoder(encoded)
         return decoded
+    
+class SelfAttention(nn.Module):
+    def __init__(self, in_dim):
+        super().__init__()
+        self.query_conv = nn.Conv2d(in_dim, in_dim//8, kernel_size=1)
+        self.key_conv = nn.Conv2d(in_dim, in_dim//8, kernel_size=1)
+        self.value_conv = nn.Conv2d(in_dim, in_dim, kernel_size=1)
+        self.gamma = nn.Parameter(torch.zeros(1))
+        self.softmax = nn.Softmax(dim=-1)
+
+    def forward(self, x):
+        batch_size, C, width, height = x.size()
+
+        proj_query = self.query_conv(x).view(batch_size, -1, width*height).permute(0,2,1)
+        proj_key = self.key_conv(x).view(batch_size, -1, width*height)
+        energy = torch.bmm(proj_query, proj_key)
+        attention = self.softmax(energy)
+
+        proj_value = self.value_conv(x).view(batch_size, -1, width*height)
+        out = torch.bmm(proj_value, attention.permute(0,2,1))
+        out = out.view(batch_size, C, width, height)
+
+        out = self.gamma * out + x
+        return out
 
 class HybridLoss(nn.Module):
     def __init__(self, device, alpha=0.8):
