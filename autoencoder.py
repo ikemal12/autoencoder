@@ -1,5 +1,6 @@
 import torch
 import os
+import time
 import numpy as np
 import torch.nn as nn
 import torch.optim as optim
@@ -261,7 +262,13 @@ def train():
     patience = 5
     patience_counter = 0
 
+    # Record the start time of the training
+    total_start_time = time.time()
+
     for epoch in range(start_epoch, num_epochs):
+        # Record the start time of the epoch
+        epoch_start_time = time.time()
+
         model.train()
         epoch_loss = 0
         running_loss = 0
@@ -316,8 +323,12 @@ def train():
         val_loss /= len(val_loader)
         avg_train_loss = epoch_loss / len(train_loader)
         
+        # Record the end time of the epoch
+        epoch_end_time = time.time()
+        epoch_duration = epoch_end_time - epoch_start_time
+
         # Report epoch stats
-        print(f'Epoch [{epoch+1}/{num_epochs}], Train Loss: {avg_train_loss:.4f}, Val Loss: {val_loss:.4f}, LR: {optimizer.param_groups[0]["lr"]:.6f}')
+        print(f'Epoch [{epoch+1}/{num_epochs}], Train Loss: {avg_train_loss:.4f}, Val Loss: {val_loss:.4f}, LR: {optimizer.param_groups[0]["lr"]:.6f}, Time: {epoch_duration:.2f} seconds')
             
         # Save best model
         if val_loss < best_loss:
@@ -340,6 +351,13 @@ def train():
         if patience_counter >= patience:
             print(f"Early stopping triggered after {epoch+1} epochs")
             break
+
+    # Record the end time of the training
+    total_end_time = time.time()
+    total_duration = total_end_time - total_start_time
+
+    # Print the total time taken for training
+    print(f"Total training time: {total_duration:.2f} seconds")
 
 if __name__ == '__main__':
     train()
