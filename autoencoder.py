@@ -11,6 +11,7 @@ from torchmetrics.image import StructuralSimilarityIndexMeasure
 from lion_pytorch import Lion
 from torch.cuda.amp import autocast, GradScaler
 import logging
+import matplotlib.pyplot as plt
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -169,6 +170,49 @@ def process_subset(subset, batch_size, all_tensors, transform, total_samples):
         processed += len(batch)
         logging.info(f"Processed {processed}/{total_samples} images")
 
+def visualize_results(model, val_loader, device, epoch, num_images=5):
+    model.eval()
+    with torch.no_grad():
+        # Get a batch of images from the validation loader
+        for batch in val_loader:
+            images = batch[0].to(device)
+            break  # We only need one batch
+
+        # Select the first `num_images` images from the batch
+        images = images[:num_images]
+
+        # Pass the images through the autoencoder
+        decompressed_images, compressed_images = model(images)
+
+        # Convert tensors to numpy arrays and permute dimensions for visualization
+        images = images.cpu().numpy().transpose(0, 2, 3, 1)
+        decompressed_images = decompressed_images.cpu().numpy().transpose(0, 2, 3, 1)
+
+        # Display the images
+        plt.figure(figsize=(15, 5 * num_images))
+        for i in range(num_images):
+            # Original Image
+            plt.subplot(num_images, 3, 3 * i + 1)
+            plt.imshow(images[i])
+            plt.title("Original Image")
+            plt.axis('off')
+
+            # Compressed Image (Latent Representation)
+            plt.subplot(num_images, 3, 3 * i + 2)
+            latent_image = compressed_images[i].cpu().numpy()
+            plt.imshow(latent_image.mean(0), cmap='viridis')  # Take the mean across channels
+            plt.title("Compressed Image (Latent Space)")
+            plt.axis('off')
+
+            # Decompressed Image
+            plt.subplot(num_images, 3, 3 * i + 3)
+            plt.imshow(decompressed_images[i])
+            plt.title(f"Decompressed Image (Epoch {epoch + 1})")
+            plt.axis('off')
+
+        plt.tight_layout()
+        plt.show()
+
 def train(retrain=False): 
     free_memory()
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -323,6 +367,10 @@ def train(retrain=False):
         epoch_duration = epoch_end_time - epoch_start_time
         logging.info(f'Epoch [{epoch+1}/{num_epochs}], Train Loss: {avg_train_loss:.4f}, Val Loss: {val_loss:.4f}, '
                      f'Val SSIM: {val_ssim:.4f}, LR: {optimizer.param_groups[0]["lr"]:.6f}, Time: {epoch_duration:.2f} seconds')
+        
+        # Visualize results after every epoch
+        visualize_results(model, val_loader, device, epoch)
+
         if val_loss < best_loss:
             best_loss = val_loss
             torch.save({
