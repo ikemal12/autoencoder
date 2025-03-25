@@ -15,11 +15,9 @@ class HybridLoss(nn.Module):
         # Clamp inputs to avoid extreme values
         pred = torch.clamp(pred, 0.001, 0.999)
         
-        # Compute losses
         ssim_loss = 1 - self.ssim(pred, target)
         mse_loss = self.mse(pred, target)
-        
-        # Add latent loss if encoded representation is provided
+
         if encoded is not None:
             latent_loss = torch.mean(torch.abs(encoded) + 1e-8)
             return self.alpha * mse_loss + self.beta * ssim_loss + self.gamma * latent_loss

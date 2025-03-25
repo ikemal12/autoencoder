@@ -4,31 +4,26 @@ from typing import List, Tuple, Optional
 
 @dataclass
 class TrainingConfig:
-    # Data configuration
     data_dir: str = "data"
     cache_tensors: bool = True
     input_size: Tuple[int, int] = (144, 224)
-    
-    # Model hyperparameters
+
     latent_dim: int = 96
     use_attention: bool = True
     dropout_rate: float = 0.5
     residual_layers: int = 2
     filters: Tuple[int, ...] = (32, 64, 128)
     
-    # Training configuration
     batch_size: int = 32
     num_epochs: int = 20
     learning_rate: float = 2e-3
     weight_decay: float = 0.0025
     optimizer: str = 'Lion'
     
-    # Loss function parameters
     alpha: float = 0.6  # MSE weight
     beta: float = 0.35  # SSIM weight
     gamma: float = 0.05  # Latent regularization weight
     
-    # Logging and checkpointing
     checkpoint_dir: str = "checkpoints"
     log_interval: int = 10
     save_best_model: bool = True

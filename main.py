@@ -5,7 +5,7 @@ from models.autoencoder import Autoencoder
 from models.loss import HybridLoss
 from data.dataset import load_data, create_dataloaders
 from training.trainer import train_model
-from training.hyperparameter_tuning import optimize_hyperparameters
+from training.tuning import optimize_hyperparameters
 
 def main():
     # Set up logging

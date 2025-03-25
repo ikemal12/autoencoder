@@ -21,13 +21,11 @@ def load_data(cache_tensors=True, cache_file="processed_data_tensors.pt"):
         data_tensor = torch.load(cache_file)
         return TensorDataset(data_tensor)
 
-    # Transformation pipeline
     transform = transforms.Compose([
         transforms.ToTensor(),
         transforms.Resize((144, 224)),
     ])
 
-    # Subset processing
     subsets = ["subset_1.npy", "subset_2.npy", "subset_3.npy"]
     all_tensors = []
     batch_size = 500
@@ -65,7 +63,6 @@ def create_dataloaders(dataset, train_ratio=0.9, batch_size=32, num_workers=2):
     val_size = len(dataset) - train_size
     train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
 
-    # Create dataloaders
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,

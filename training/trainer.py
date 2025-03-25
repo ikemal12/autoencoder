@@ -6,7 +6,7 @@ import torch.optim as optim
 from torchmetrics.image import StructuralSimilarityIndexMeasure
 from lion_pytorch import Lion
 from models.loss import HybridLoss
-from utils.visualization import visualize_results
+from utils.visualisation import visualize_results
 
 def train_model(model, train_loader, val_loader, device, best_params):
     """
@@ -19,11 +19,9 @@ def train_model(model, train_loader, val_loader, device, best_params):
         device (torch.device): Device to train on
         best_params (dict): Best hyperparameters from optimization
     """
-    # Hyperparameters from best_params
     lr = best_params.get('lr', 0.002)
     weight_decay = best_params.get('weight_decay', 0.0025)
-    
-    # Loss function
+
     criterion = HybridLoss(
         device, 
         alpha=best_params.get('alpha', 0.6), 
@@ -31,10 +29,8 @@ def train_model(model, train_loader, val_loader, device, best_params):
         gamma=best_params.get('gamma', 0.05)
     )
 
-    # Optimizer
     optimizer = Lion(model.parameters(), lr=lr, weight_decay=weight_decay)
-    
-    # Learning rate scheduler
+
     scheduler = optim.lr_scheduler.OneCycleLR(
         optimizer,
         max_lr=lr,
@@ -43,12 +39,10 @@ def train_model(model, train_loader, val_loader, device, best_params):
         pct_start=0.3
     )
 
-    # Training configuration
     num_epochs = 20
     best_loss = float('inf')
     
     for epoch in range(num_epochs):
-        # Training phase
         model.train()
         epoch_loss = 0
         
@@ -59,7 +53,7 @@ def train_model(model, train_loader, val_loader, device, best_params):
             recon, encoded = model(img)
             loss = criterion(recon, img, encoded)
             
-            # Backward pass and optimization
+            # Backward pass and optimisation
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -93,7 +87,6 @@ def train_model(model, train_loader, val_loader, device, best_params):
             best_loss = val_loss
             torch.save(model.state_dict(), 'best_model.pth')
         
-        # Visualization
         visualize_results(model, val_loader, device, epoch)
 
     logging.info("Training completed.")

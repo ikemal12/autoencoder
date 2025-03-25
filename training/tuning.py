@@ -16,19 +16,17 @@ def objective(trial, train_loader, val_loader, device):
     Returns:
         float: Validation loss
     """
-    # Hyperparameters to optimize
+    # Hyperparameters to optimise
     latent_dim = trial.suggest_int('latent_dim', 48, 196, step=16)
     dropout_rate = trial.suggest_float('dropout_rate', 0.1, 0.7)
     use_attention = trial.suggest_categorical('use_attention', [True, False])
     residual_layers = trial.suggest_int('residual_layers', 1, 3)
     
-    # Dynamic filter configuration
     filters = []
     num_filters = trial.suggest_int('num_filters', 2, 4)
     for i in range(num_filters):
         filters.append(trial.suggest_int(f'filter_{i}', 16, 256, step=16))
     
-    # Create model
     model = Autoencoder(
         latent_dim=latent_dim, 
         use_attention=use_attention,
@@ -37,12 +35,10 @@ def objective(trial, train_loader, val_loader, device):
         filters=tuple(filters)
     ).to(device)
     
-    # Optimizer and loss function
     lr = trial.suggest_float('lr', 1e-4, 5e-3, log=True)
     weight_decay = trial.suggest_float('weight_decay', 1e-5, 1e-2, log=True)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
     
-    # Loss function parameters
     criterion = HybridLoss(
         device, 
         alpha=trial.suggest_float('alpha', 0.3, 0.8),
