@@ -18,7 +18,7 @@ The decoder mirrors the encoder, using transpose convolutions for upsampling, th
 
 ## Hyperparameter Tuning
 
-
+I made use of the Optuna library to automate the hyperparameter tuning process. By running trials, I systematically explored a complex search space of model configurations, including latent dimensions, network architecture, and loss function parameters. Optuna intelligently pruned underperforming configurations, ultimately helping me identify an optimal model design that balances compression efficiency and reconstruction quality. The hyperparameter tuning process allowed me to discover nuanced configurations that significantly improved the autoencoder's performance beyond what manual tuning could achieve.
 
 ## Training 
 
